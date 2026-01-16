@@ -1,0 +1,273 @@
+# =============================================================================
+# CUSTOM QUERIES PARA MONITOREO MULTI-TENANT
+# =============================================================================
+# Estas queries exponen métricas por tabla/cliente, permitiendo crear
+# dashboards filtrados por cliente en Grafana.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Estadísticas por tabla de cliente
+# -----------------------------------------------------------------------------
+pg_client_tables:
+  query: |
+    SELECT
+      schemaname,
+      relname as client_name,
+      seq_scan,
+      seq_tup_read,
+      idx_scan,
+      idx_tup_fetch,
+      n_tup_ins as inserts_total,
+      n_tup_upd as updates_total,
+      n_tup_del as deletes_total,
+      n_live_tup as live_rows,
+      n_dead_tup as dead_rows,
+      COALESCE(EXTRACT(EPOCH FROM (now() - last_vacuum)), 0) as seconds_since_vacuum,
+      COALESCE(EXTRACT(EPOCH FROM (now() - last_analyze)), 0) as seconds_since_analyze
+    FROM pg_stat_user_tables
+    WHERE schemaname = 'clients'
+  metrics:
+    - schemaname:
+        usage: "LABEL"
+        description: "Schema name"
+    - client_name:
+        usage: "LABEL"
+        description: "Client table name"
+    - seq_scan:
+        usage: "COUNTER"
+        description: "Sequential scans initiated"
+    - seq_tup_read:
+        usage: "COUNTER"
+        description: "Rows fetched by sequential scans"
+    - idx_scan:
+        usage: "COUNTER"
+        description: "Index scans initiated"
+    - idx_tup_fetch:
+        usage: "COUNTER"
+        description: "Rows fetched by index scans"
+    - inserts_total:
+        usage: "COUNTER"
+        description: "Total rows inserted"
+    - updates_total:
+        usage: "COUNTER"
+        description: "Total rows updated"
+    - deletes_total:
+        usage: "COUNTER"
+        description: "Total rows deleted"
+    - live_rows:
+        usage: "GAUGE"
+        description: "Estimated live rows"
+    - dead_rows:
+        usage: "GAUGE"
+        description: "Estimated dead rows"
+    - seconds_since_vacuum:
+        usage: "GAUGE"
+        description: "Seconds since last vacuum"
+    - seconds_since_analyze:
+        usage: "GAUGE"
+        description: "Seconds since last analyze"
+
+# -----------------------------------------------------------------------------
+# Tamaño de tablas por cliente
+# -----------------------------------------------------------------------------
+pg_client_table_size:
+  query: |
+    SELECT
+      schemaname,
+      relname as client_name,
+      pg_total_relation_size(relid) as total_bytes,
+      pg_relation_size(relid) as table_bytes,
+      pg_indexes_size(relid) as index_bytes,
+      COALESCE(pg_total_relation_size(relid) - pg_relation_size(relid) - pg_indexes_size(relid), 0) as toast_bytes
+    FROM pg_stat_user_tables
+    WHERE schemaname = 'clients'
+  metrics:
+    - schemaname:
+        usage: "LABEL"
+        description: "Schema name"
+    - client_name:
+        usage: "LABEL"
+        description: "Client table name"
+    - total_bytes:
+        usage: "GAUGE"
+        description: "Total size including indexes and TOAST"
+    - table_bytes:
+        usage: "GAUGE"
+        description: "Size of main table"
+    - index_bytes:
+        usage: "GAUGE"
+        description: "Size of indexes"
+    - toast_bytes:
+        usage: "GAUGE"
+        description: "Size of TOAST data"
+
+# -----------------------------------------------------------------------------
+# Conexiones activas
+# -----------------------------------------------------------------------------
+pg_connections:
+  query: |
+    SELECT
+      COALESCE(datname, 'unknown') as database,
+      COALESCE(usename, 'unknown') as username,
+      COALESCE(state, 'unknown') as state,
+      COALESCE(wait_event_type, 'none') as wait_event_type,
+      COUNT(*) as count
+    FROM pg_stat_activity
+    WHERE pid != pg_backend_pid()
+    GROUP BY datname, usename, state, wait_event_type
+  metrics:
+    - database:
+        usage: "LABEL"
+        description: "Database name"
+    - username:
+        usage: "LABEL"
+        description: "Connected user"
+    - state:
+        usage: "LABEL"
+        description: "Connection state"
+    - wait_event_type:
+        usage: "LABEL"
+        description: "Wait event type"
+    - count:
+        usage: "GAUGE"
+        description: "Number of connections"
+
+# -----------------------------------------------------------------------------
+# Estadísticas de la base de datos
+# -----------------------------------------------------------------------------
+pg_database_stats:
+  query: |
+    SELECT
+      datname as database,
+      numbackends as connections,
+      xact_commit as commits,
+      xact_rollback as rollbacks,
+      blks_read,
+      blks_hit,
+      CASE WHEN (blks_hit + blks_read) > 0 
+           THEN blks_hit::float / (blks_hit + blks_read) 
+           ELSE 0 END as cache_hit_ratio,
+      tup_returned,
+      tup_fetched,
+      tup_inserted,
+      tup_updated,
+      tup_deleted,
+      conflicts,
+      temp_files,
+      temp_bytes,
+      deadlocks
+    FROM pg_stat_database
+    WHERE datname = current_database()
+  metrics:
+    - database:
+        usage: "LABEL"
+        description: "Database name"
+    - connections:
+        usage: "GAUGE"
+        description: "Active connections"
+    - commits:
+        usage: "COUNTER"
+        description: "Transactions committed"
+    - rollbacks:
+        usage: "COUNTER"
+        description: "Transactions rolled back"
+    - blks_read:
+        usage: "COUNTER"
+        description: "Disk blocks read"
+    - blks_hit:
+        usage: "COUNTER"
+        description: "Buffer cache hits"
+    - cache_hit_ratio:
+        usage: "GAUGE"
+        description: "Cache hit ratio (should be > 0.99)"
+    - tup_returned:
+        usage: "COUNTER"
+        description: "Rows returned by queries"
+    - tup_fetched:
+        usage: "COUNTER"
+        description: "Rows fetched by queries"
+    - tup_inserted:
+        usage: "COUNTER"
+        description: "Rows inserted"
+    - tup_updated:
+        usage: "COUNTER"
+        description: "Rows updated"
+    - tup_deleted:
+        usage: "COUNTER"
+        description: "Rows deleted"
+    - conflicts:
+        usage: "COUNTER"
+        description: "Queries cancelled due to conflicts"
+    - temp_files:
+        usage: "COUNTER"
+        description: "Temporary files created"
+    - temp_bytes:
+        usage: "COUNTER"
+        description: "Temporary file bytes written"
+    - deadlocks:
+        usage: "COUNTER"
+        description: "Deadlocks detected"
+
+# -----------------------------------------------------------------------------
+# Locks activos
+# -----------------------------------------------------------------------------
+pg_locks_count:
+  query: |
+    SELECT
+      COALESCE(mode, 'unknown') as mode,
+      COALESCE(locktype, 'unknown') as locktype,
+      granted::text as granted,
+      COUNT(*) as count
+    FROM pg_locks
+    GROUP BY mode, locktype, granted
+  metrics:
+    - mode:
+        usage: "LABEL"
+        description: "Lock mode"
+    - locktype:
+        usage: "LABEL"
+        description: "Lock type"
+    - granted:
+        usage: "LABEL"
+        description: "Lock granted status"
+    - count:
+        usage: "GAUGE"
+        description: "Number of locks"
+
+# -----------------------------------------------------------------------------
+# Queries lentas (solo si pg_stat_statements está habilitado)
+# -----------------------------------------------------------------------------
+pg_slow_queries:
+  query: |
+    SELECT
+      COALESCE(usename, 'unknown') as username,
+      COALESCE(datname, 'unknown') as database,
+      calls,
+      total_exec_time as total_time_ms,
+      mean_exec_time as mean_time_ms,
+      rows
+    FROM pg_stat_statements s
+    JOIN pg_database d ON s.dbid = d.oid
+    JOIN pg_user u ON s.userid = u.usesysid
+    WHERE mean_exec_time > 100
+    ORDER BY mean_exec_time DESC
+    LIMIT 10
+  metrics:
+    - username:
+        usage: "LABEL"
+        description: "Query user"
+    - database:
+        usage: "LABEL"
+        description: "Database"
+    - calls:
+        usage: "COUNTER"
+        description: "Number of calls"
+    - total_time_ms:
+        usage: "COUNTER"
+        description: "Total execution time (ms)"
+    - mean_time_ms:
+        usage: "GAUGE"
+        description: "Mean execution time (ms)"
+    - rows:
+        usage: "COUNTER"
+        description: "Total rows returned"

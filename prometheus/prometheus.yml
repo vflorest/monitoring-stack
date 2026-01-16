@@ -1,0 +1,60 @@
+# =============================================================================
+# PROMETHEUS CONFIGURATION
+# =============================================================================
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: 'monitoring-stack'
+    environment: 'development'
+
+# =============================================================================
+# SCRAPE CONFIGS
+# =============================================================================
+scrape_configs:
+  # ---------------------------------------------------------------------------
+  # Prometheus self-monitoring
+  # ---------------------------------------------------------------------------
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          service: 'prometheus'
+          component: 'monitoring'
+
+  # ---------------------------------------------------------------------------
+  # Node Exporter - Hardware metrics (CPU, RAM, Disk, Network)
+  # ---------------------------------------------------------------------------
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node_exporter:9100']
+        labels:
+          service: 'node-exporter'
+          component: 'hardware'
+    # Métricas disponibles:
+    # - node_cpu_seconds_total
+    # - node_memory_MemTotal_bytes / MemAvailable_bytes
+    # - node_disk_read_bytes_total / write_bytes_total
+    # - node_network_receive_bytes_total / transmit_bytes_total
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL Exporter - Database metrics
+  # ---------------------------------------------------------------------------
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres_exporter:9187']
+        labels:
+          service: 'postgres-exporter'
+          component: 'database'
+    # Métricas disponibles:
+    # - pg_client_tables_* (por cliente)
+    # - pg_client_table_size_* (tamaño por cliente)
+    # - pg_connections_count
+    # - pg_database_stats_*
+
+# =============================================================================
+# ALERTING RULES (opcional, para implementar después)
+# =============================================================================
+# rule_files:
+#   - '/etc/prometheus/rules/*.yml'

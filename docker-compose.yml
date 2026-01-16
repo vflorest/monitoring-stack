@@ -1,0 +1,156 @@
+# =============================================================================
+# MONITORING STACK - Prometheus + Grafana + PostgreSQL Multi-tenant
+# =============================================================================
+# Uso:
+#   docker-compose up -d              # Levantar todo
+#   docker-compose logs -f            # Ver logs
+#   docker-compose down -v            # Detener y limpiar volúmenes
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # POSTGRESQL - Base de datos multi-tenant (una tabla por cliente)
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:15-alpine
+    container_name: monitoring_postgres
+    environment:
+      POSTGRES_USER: monitor_admin
+      POSTGRES_PASSWORD: monitor_pass_2024
+      POSTGRES_DB: production_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U monitor_admin -d production_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - monitoring_net
+
+  # ---------------------------------------------------------------------------
+  # POSTGRES EXPORTER - Métricas de PostgreSQL para Prometheus
+  # ---------------------------------------------------------------------------
+  postgres_exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: monitoring_pg_exporter
+    environment:
+      DATA_SOURCE_NAME: "postgresql://monitor_admin:monitor_pass_2024@postgres:5432/production_db?sslmode=disable"
+    command:
+      - '--extend.query-path=/etc/postgres_exporter/queries.yml'
+      - '--log.level=info'
+    volumes:
+      - ./prometheus/queries.yml:/etc/postgres_exporter/queries.yml:ro
+    ports:
+      - "9187:9187"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - monitoring_net
+
+  # ---------------------------------------------------------------------------
+  # NODE EXPORTER - Métricas de hardware (CPU, RAM, Disco, Red)
+  # ---------------------------------------------------------------------------
+  node_exporter:
+    image: prom/node-exporter:latest
+    container_name: monitoring_node_exporter
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    ports:
+      - "9100:9100"
+    networks:
+      - monitoring_net
+
+  # ---------------------------------------------------------------------------
+  # PROMETHEUS - Recolector y almacén de métricas
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: monitoring_prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/queries.yml:/etc/prometheus/queries.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      - postgres_exporter
+      - node_exporter
+    networks:
+      - monitoring_net
+
+  # ---------------------------------------------------------------------------
+  # GRAFANA - Visualización y dashboards
+  # ---------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:latest
+    container_name: monitoring_grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: grafana_admin_2024
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_INSTALL_PLUGINS: grafana-clock-panel,grafana-piechart-panel
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - monitoring_net
+
+  # ---------------------------------------------------------------------------
+  # LOAD GENERATOR - Simulador de carga para PostgreSQL
+  # ---------------------------------------------------------------------------
+  load_generator:
+    build:
+      context: ./scripts
+      dockerfile: Dockerfile
+    container_name: monitoring_load_generator
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: monitor_admin
+      POSTGRES_PASSWORD: monitor_pass_2024
+      POSTGRES_DB: production_db
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - monitoring_net
+    # Por defecto está detenido, ejecutar manualmente:
+    # docker-compose run --rm load_generator python load_generator.py --mode heavy
+    profiles:
+      - tools
+
+networks:
+  monitoring_net:
+    driver: bridge
+    name: monitoring_network
+
+volumes:
+  postgres_data:
+    name: monitoring_pg_data
+  prometheus_data:
+    name: monitoring_prom_data
+  grafana_data:
+    name: monitoring_grafana_data
